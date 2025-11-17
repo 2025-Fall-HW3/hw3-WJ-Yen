@@ -70,6 +70,49 @@ class MyPortfolio:
         """
         TODO: Complete Task 4 Below
         """
+        returns = self.returns[assets]
+
+        look_ret = 120
+        look_vol = self.lookback
+
+        for i in range(max(look_ret, look_vol) + 1, len(self.price)):
+
+            # 1. Momentum：過去 120 天累積報酬
+            ret_window = returns.iloc[i - look_ret : i]
+            cum_ret = (1 + ret_window).prod() - 1  # Series
+
+            pos_mask = (cum_ret > 0).values.astype(float)
+
+            # 若全部負報酬 → 等權
+            if pos_mask.sum() == 0:
+                w = np.ones(len(assets)) / len(assets)
+                self.portfolio_weights.loc[self.price.index[i], assets] = w
+                continue
+
+            # 2. Volatility (inverse vol)
+            vol_window = returns.iloc[i - look_vol : i]
+            sigma = vol_window.std().values
+            sigma = np.where(sigma == 0, 1e-8, sigma)
+
+            inv_sigma = 1 / sigma
+
+            # 只保留正動能者
+            inv_sigma = inv_sigma * pos_mask
+
+            # 若變成 0（容錯）→ 等權
+            if inv_sigma.sum() == 0:
+                w = np.ones(len(assets)) / len(assets)
+            else:
+                w = inv_sigma / inv_sigma.sum()
+
+            self.portfolio_weights.loc[self.price.index[i], assets] = w
+
+        # 前面資料不足 → 全等權
+        eqw = np.ones(len(assets)) / len(assets)
+        self.portfolio_weights.iloc[: max(look_ret, look_vol)] = 0
+        self.portfolio_weights.loc[
+            self.price.index[: max(look_ret, look_vol)], assets
+        ] = eqw
         
         
         """

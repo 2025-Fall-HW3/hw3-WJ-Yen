@@ -62,6 +62,9 @@ class EqualWeightPortfolio:
         """
         TODO: Complete Task 1 Below
         """
+        weights = np.ones(len(assets)) / len(assets)
+        for date in df.index:
+            self.portfolio_weights.loc[date, assets] = weights
 
         """
         TODO: Complete Task 1 Above
@@ -114,7 +117,25 @@ class RiskParityPortfolio:
         TODO: Complete Task 2 Below
         """
 
+        # 只使用非 SPY 資產的報酬資料
+        R = df_returns.copy()[assets]
 
+        for i in range(self.lookback + 1, len(df)):
+            # 過去 lookback 天的報酬
+            R_n = R.iloc[i - self.lookback : i]
+
+            # 每個資產的波動度（標準差）
+            sigma = R_n.std().values
+            # 避免 0 波動導致除以 0
+            sigma = np.where(sigma == 0, 1e-8, sigma)
+
+            # 逆波動
+            inv_sigma = 1.0 / sigma
+            # 正規化成權重，總和 = 1
+            w = inv_sigma / inv_sigma.sum()
+
+            # 寫入當天的權重（只對非 SPY 資產）
+            self.portfolio_weights.loc[df.index[i], assets] = w
 
         """
         TODO: Complete Task 2 Above
@@ -187,11 +208,15 @@ class MeanVariancePortfolio:
                 """
                 TODO: Complete Task 3 Below
                 """
+                w = model.addMVar(n, lb=0.0, name="w")
 
-                # Sample Code: Initialize Decision w and the Objective
-                # NOTE: You can modify the following code
-                w = model.addMVar(n, name="w", ub=1)
-                model.setObjective(w.sum(), gp.GRB.MAXIMIZE)
+                # 目標：maximize mu^T w - γ/2 * w^T Σ w
+                quad = 0.5 * gamma * (w @ Sigma @ w)   # 風險項
+                linear = mu @ w                        # 報酬項
+                model.setObjective(linear - quad, gp.GRB.MAXIMIZE)
+
+                # 約束條件：∑ w_i = 1
+                model.addConstr(w.sum() == 1, name="budget")
 
                 """
                 TODO: Complete Task 3 Above
