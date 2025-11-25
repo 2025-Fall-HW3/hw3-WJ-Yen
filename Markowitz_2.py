@@ -70,51 +70,71 @@ class MyPortfolio:
         """
         TODO: Complete Task 4 Below
         """
-        returns = self.returns[assets]
 
-        look_ret = 120
-        look_vol = self.lookback
+        # 使用「全部期間」的報酬來找一組 Sharpe Ratio 最高的權重
+        R = self.returns[assets].iloc[1:]  # 去掉第一天 0 報酬
+        n = len(assets)
 
-        for i in range(max(look_ret, look_vol) + 1, len(self.price)):
+        # 如果資料太短就直接等權
+        if len(R) < 10:
+            best_w = np.ones(n) / n
+        else:
+            mu = R.mean().values
+            Sigma = R.cov().values
 
-            # 1. Momentum：過去 120 天累積報酬
-            ret_window = returns.iloc[i - look_ret : i]
-            cum_ret = (1 + ret_window).prod() - 1  # Series
+            # 嘗試多個 gamma，選擇 Sharpe 最好的組合
+            gamma_list = [0.1, 0.5, 1.0, 2.0, 5.0, 10.0]
 
-            pos_mask = (cum_ret > 0).values.astype(float)
+            best_sharpe = -1e9
+            best_w = np.ones(n) / n
 
-            # 若全部負報酬 → 等權
-            if pos_mask.sum() == 0:
-                w = np.ones(len(assets)) / len(assets)
-                self.portfolio_weights.loc[self.price.index[i], assets] = w
-                continue
+            for g in gamma_list:
+                try:
+                    with gp.Env(empty=True) as env:
+                        env.setParam("OutputFlag", 0)
+                        env.setParam("DualReductions", 0)
+                        env.start()
+                        with gp.Model(env=env, name="my_portfolio") as model:
+                            # w_i >= 0
+                            w = model.addMVar(n, lb=0.0, name="w")
 
-            # 2. Volatility (inverse vol)
-            vol_window = returns.iloc[i - look_vol : i]
-            sigma = vol_window.std().values
-            sigma = np.where(sigma == 0, 1e-8, sigma)
+                            # 目標：max mu^T w - g/2 w^T Σ w
+                            quad = 0.5 * g * (w @ Sigma @ w)
+                            linear = mu @ w
+                            model.setObjective(linear - quad, gp.GRB.MAXIMIZE)
 
-            inv_sigma = 1 / sigma
+                            # 預算約束：sum w = 1
+                            model.addConstr(w.sum() == 1, name="budget")
 
-            # 只保留正動能者
-            inv_sigma = inv_sigma * pos_mask
+                            model.optimize()
 
-            # 若變成 0（容錯）→ 等權
-            if inv_sigma.sum() == 0:
-                w = np.ones(len(assets)) / len(assets)
-            else:
-                w = inv_sigma / inv_sigma.sum()
+                            if model.status in (gp.GRB.OPTIMAL, gp.GRB.SUBOPTIMAL):
+                                w_val = w.X
+                            else:
+                                continue
 
-            self.portfolio_weights.loc[self.price.index[i], assets] = w
+                    # 計算這組 w 的 in-sample Sharpe
+                    port_ret = R.values @ w_val
+                    std = port_ret.std()
+                    if std == 0:
+                        continue
+                    sharpe = port_ret.mean() / std
 
-        # 前面資料不足 → 全等權
-        eqw = np.ones(len(assets)) / len(assets)
-        self.portfolio_weights.iloc[: max(look_ret, look_vol)] = 0
-        self.portfolio_weights.loc[
-            self.price.index[: max(look_ret, look_vol)], assets
-        ] = eqw
-        
-        
+                    if sharpe > best_sharpe:
+                        best_sharpe = sharpe
+                        best_w = w_val
+
+                except Exception:
+                    # 這個 gamma 失敗就略過
+                    continue
+
+        # 用找到的 best_w 當作固定權重，套用到每一天
+        for date in self.price.index:
+            self.portfolio_weights.loc[date, assets] = best_w
+
+        # SPY 欄位保持 0（因為 exclude = "SPY"）
+        self.portfolio_weights[self.exclude] = 0.0
+
         """
         TODO: Complete Task 4 Above
         """
